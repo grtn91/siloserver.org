@@ -55,6 +55,34 @@ If Silo finds no hardware or the session shows **SW**, check the host driver, th
 
 With separate [transcode nodes](/docs/transcode-nodes), the detected hardware comes from a node and the line ends with **(transcode node)**. Check each node's **Acceleration** block in **Admin > Playback > Nodes**.
 
+### NVIDIA on WSL 2: GPU visible but Silo uses software
+
+On some WSL 2 installations, the NVIDIA Container Toolkit exposes the GPU through `/dev/dxg`, while Silo's NVIDIA discovery checks for `/dev/nvidiactl` or `/dev/nvidia0`. Silo may report no supported hardware even when `nvidia-smi` works inside the container. This workaround applies when `/dev/dxg` exists on the Docker host and the container has NVIDIA GPU access; it does not replace the NVIDIA reservation above.
+
+Add the following to the existing `volumes` list under the `silo` service. It makes the WSL device available at the path Silo checks, inside the container only:
+
+```yaml
+    volumes:
+      - /dev/dxg:/dev/nvidiactl
+```
+
+Keep the other volumes in that list. Check and recreate the container using the commands above; this interrupts active playback. Then check that Silo can see the GPU and has verified NVENC:
+
+```sh
+docker compose exec -T silo nvidia-smi -L
+docker compose logs silo | grep 'verified hardware backend'
+```
+
+A successful detection log includes `backend=nvenc`. You can also test the bundled FFmpeg encoder as the configured Silo user, substituting the `PUID` and `PGID` values from `.env`:
+
+```sh
+docker compose exec -T --user 1000:1000 silo /usr/lib/jellyfin-ffmpeg/ffmpeg \
+  -hide_banner -loglevel error -f lavfi -i testsrc2=size=640x480:rate=24 \
+  -frames:v 2 -c:v h264_nvenc -f null -
+```
+
+A successful command exits without an error. Use a normal video size for the test: some NVIDIA drivers reject very small frames. A successful test proves the encoder works in the container, but does not prove a playback session uses it. Start a new transcode and check **Admin > Activity** as described above. If detection or the test fails, check the WSL NVIDIA driver, Container Toolkit configuration, device access, and Silo logs.
+
 ## After a driver or device change
 
 A single server checks its hardware again when it restarts: run `docker compose restart silo`.
